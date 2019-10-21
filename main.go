@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
 	"time"
 
 	"github.com/g3n/engine/app"
@@ -11,9 +14,35 @@ import (
 	"github.com/g3n/engine/gui"
 	"github.com/g3n/engine/renderer"
 	"github.com/g3n/engine/window"
+	"golang.org/x/net/websocket"
 )
 
+type Message struct {
+	Text string `json:"text"`
+}
+
+func connect(ip string) (*websocket.Conn, error) {
+	return websocket.Dial(fmt.Sprintf("ws://localhost:%s", "8081"), "", fmt.Sprintf("http://%s", ip))
+}
+
 func main() {
+	resp, err := http.Get("http://localhost:8081/client")
+	if err != nil {
+		// handle error
+	}
+	defer resp.Body.Close()
+	ip, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("get IP from server", string(ip))
+
+	ws, err := connect(string(ip))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ws.Close()
+
 	winWidth := 800
 	winHeight := 600
 	// Create application and scene
@@ -62,11 +91,42 @@ func main() {
 	converseScroller.SetPosition(10, 10)
 	scene.Add(converseScroller)
 
+	var m Message
+	go func() {
+		for {
+			err := websocket.JSON.Receive(ws, &m)
+			if err != nil {
+				fmt.Println("Error receiving message: ", err.Error())
+
+				connEstablish := false
+				for !connEstablish {
+					ws, err = connect(string(ip))
+					if err != nil {
+						log.Println("Error connect, sleep 1 sec", err)
+						time.Sleep(1 * time.Second)
+					} else {
+						connEstablish = true
+					}
+				}
+
+			}
+			fmt.Println("Message: ", m)
+			converseScroller.Add(gui.NewLabel(m.Text))
+		}
+	}()
+
 	sendButton := gui.NewButton("Send")
 	sendButton.SetPosition(float32(winWidth-50), float32(winHeight-50))
 	sendButton.SetSize(45, 45)
 	sendButton.Subscribe(gui.OnClick, func(name string, ev interface{}) {
-		converseScroller.Add(gui.NewLabel(inputTextEdit.Text()))
+		// converseScroller.Add(gui.NewLabel(inputTextEdit.Text()))
+		m := Message{
+			Text: inputTextEdit.Text(),
+		}
+		err = websocket.JSON.Send(ws, m)
+		if err != nil {
+			fmt.Println("Error sending message: ", err.Error())
+		}
 		inputTextEdit.SetText("")
 	})
 	scene.Add(sendButton)
